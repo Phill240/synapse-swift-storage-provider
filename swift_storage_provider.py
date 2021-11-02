@@ -145,7 +145,7 @@ def swift_download_task(
             local_data.connection = connection
 
         try:
-            resp = connection.object_store.download_object(object_name, container)
+            resp = connection.get_object_raw(container, object_name, stream=True)
         except openstack.exceptions.ResourceNotFound:
             logger.info("Media %s not found in swift", object_name)
             reactor.callFromThread(deferred.callback, None)
@@ -156,7 +156,7 @@ def swift_download_task(
 
         producer = _SwiftResponder()
         reactor.callFromThread(deferred.callback, producer)
-        _stream_to_producer(reactor, producer, resp["Body"], timeout=90.0)
+        _stream_to_producer(reactor, producer, resp.iter_content(chunk_size=READ_CHUNK_SIZE), timeout=90.0)
 
 
 def _stream_to_producer(reactor, producer, body, status=None, timeout=None):
@@ -198,8 +198,9 @@ def _stream_to_producer(reactor, producer, body, status=None, timeout=None):
             if stop_event.is_set():
                 return
 
-            chunk = body.read(READ_CHUNK_SIZE)
-            if not chunk:
+            try:
+                chunk = next(body)
+            except StopIteration:
                 return
 
             reactor.callFromThread(producer._write, chunk)
