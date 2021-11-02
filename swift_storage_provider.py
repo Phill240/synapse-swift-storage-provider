@@ -145,7 +145,7 @@ def swift_download_task(
             local_data.connection = connection
 
         try:
-            resp = connection.download_object(object_name, container)
+            resp = connection.object_store.download_object(object_name, container)
         except openstack.exceptions.ResourceNotFound:
             logger.info("Media %s not found in swift", object_name)
             reactor.callFromThread(deferred.callback, None)
