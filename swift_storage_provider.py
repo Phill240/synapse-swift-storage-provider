@@ -111,6 +111,9 @@ class SwiftStorageProviderBackend(StorageProvider):
         if "region_name" in config:
             result["region_name"] = config["region_name"]
 
+        if "auth" in config:
+            result["auth"] = config["auth"]            
+
         return result
 
 
