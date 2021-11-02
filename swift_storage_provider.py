@@ -53,14 +53,17 @@ class SwiftStorageProviderBackend(StorageProvider):
     def __init__(self, hs, config):
         self.cache_directory = hs.config.media_store_path
         self.container = config["container"]
-        self.cloud = config["cloud"]
+        self.cloud = config.get("cloud")
         self.api_kwargs = {}
 
         if "region_name" in config:
             self.api_kwargs["region_name"] = config["region_name"]
 
         if "auth" in config:
-            self.api_kwargs["auth"] = config["auth"]            
+            self.api_kwargs["auth"] = config["auth"]
+
+        self._swift_conn = None
+        self._swift_conn_lock = threading.Lock()
         
         threadpool_size = config.get("threadpool_size", 40)
         self._download_pool = ThreadPool(
@@ -68,12 +71,31 @@ class SwiftStorageProviderBackend(StorageProvider):
         )
         self._download_pool.start()
 
+    def _get_swift_conn(self):
+        # this method is designed to be thread-safe, so that we can share a
+        # single boto3 client across multiple threads.
+        #
+        # (XXX: is creating a client actually a blocking operation, or could we do
+        # this on the main thread, to simplify all this?)
+
+        # first of all, do a fast lock-free check
+        conn = self._swift_conn
+        if conn:
+            return conn
+
+        # no joy, grab the lock and repeat the check
+        with self._swift_conn_lock:
+            conn = self._swift_conn
+            if not conn:
+                self._swift_conn = openstack.connection.from_config(**self.api_kwargs)
+            return self._swift_conn 
+
     def store_file(self, path, file_info):
         """See StorageProvider.store_file"""
 
         def _store_file():
-            connection = openstack.connection.from_config(**self.api_kwargs)
-            connection.object_store.create_object(
+            conn = self._get_swift_conn()
+            conn.object_store.create_object(
                 self.container, path, filename=os.path.join(self.cache_directory, path)
             )
 
@@ -87,7 +109,7 @@ class SwiftStorageProviderBackend(StorageProvider):
 
         d = defer.Deferred()
         self._download_pool.callInThread(
-            swift_download_task, self.container, self.api_kwargs, path, d, logcontext
+            swift_download_task, self._get_swift_conn(), self.container, self.api_kwargs, path, d, logcontext
         )
         return make_deferred_yieldable(d)
 
@@ -95,14 +117,12 @@ class SwiftStorageProviderBackend(StorageProvider):
     def parse_config(config):
         """Called on startup to parse config supplied. This should parse
         the config and raise if there is a problem.
-
         The returned value is passed into the constructor.
-
         In this case we return a dict with fields, `bucket` and `storage_class`
         """
 
         container = config["container"]
-        cloud = config["cloud"]
+        cloud = config.get("cloud")
 
         assert isinstance(container, string_types)
 
@@ -118,10 +138,9 @@ class SwiftStorageProviderBackend(StorageProvider):
 
 
 def swift_download_task(
-    container, api_kwargs, object_name, deferred, parent_logcontext
+    conn, container, api_kwargs, object_name, deferred, parent_logcontext
 ):
     """Attempts to download a file from swift.
-
     Args:
         container (str): The swift bucket which may have the file
         api_kwargs (dict): Keyword arguments to pass when invoking the API.
@@ -136,16 +155,8 @@ def swift_download_task(
     with LoggingContext(parent_context=parent_logcontext):
         logger.info("Fetching %s from swift", object_name)
 
-        local_data = threading.local()
-
         try:
-            connection = local_data.connection
-        except AttributeError:
-            connection = openstack.connection.from_config(**api_kwargs)
-            local_data.connection = connection
-
-        try:
-            resp = connection.get_object_raw(container, object_name, stream=True)
+            resp = conn.get_object_raw(container, object_name, stream=True)
         except openstack.exceptions.ResourceNotFound:
             logger.info("Media %s not found in swift", object_name)
             reactor.callFromThread(deferred.callback, None)
@@ -161,9 +172,7 @@ def swift_download_task(
 
 def _stream_to_producer(reactor, producer, body, status=None, timeout=None):
     """Streams a file like object to the producer.
-
     Correctly handles producer being paused/resumed/stopped.
-
     Args:
         reactor
         producer (_SwiftResponder): Producer object to stream results to
