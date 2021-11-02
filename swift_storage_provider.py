@@ -59,6 +59,9 @@ class SwiftStorageProviderBackend(StorageProvider):
         if "region_name" in config:
             self.api_kwargs["region_name"] = config["region_name"]
 
+        if "auth" in config:
+            self.api_kwargs["auth"] = config["auth"]            
+        
         threadpool_size = config.get("threadpool_size", 40)
         self._download_pool = ThreadPool(
             name="swift-download-pool", maxthreads=threadpool_size
