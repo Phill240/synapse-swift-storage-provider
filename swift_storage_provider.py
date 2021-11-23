@@ -51,7 +51,7 @@ class SwiftStorageProviderBackend(StorageProvider):
     """
 
     def __init__(self, hs, config):
-        self.cache_directory = hs.config.media_store_path
+        self.cache_directory = hs.config.media.media_store_path
         self.container = config["container"]
         self.cloud = config.get("cloud")
         self.api_kwargs = {}
