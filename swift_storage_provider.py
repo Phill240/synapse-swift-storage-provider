@@ -23,7 +23,7 @@ from six import string_types
 # import botocore
 import openstack
 
-from twisted.internet import defer, reactor
+from twisted.internet import defer, reactor, threads
 from twisted.python.failure import Failure
 from twisted.python.threadpool import ThreadPool
 
@@ -101,7 +101,10 @@ class SwiftStorageProviderBackend(StorageProvider):
 
         # XXX: reactor.callInThread doesn't return anything, so I don't think this does
         # what the author intended.
-        return make_deferred_yieldable(reactor.callInThread(_store_file))
+        #return make_deferred_yieldable(reactor.callInThread(_store_file))
+        return make_deferred_yieldable(
+            threads.deferToThreadPool(reactor, self._download_pool, _store_file)
+        )
 
     def fetch(self, path, file_info):
         """See StorageProvider.fetch"""
